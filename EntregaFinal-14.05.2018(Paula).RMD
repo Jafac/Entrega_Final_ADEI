@@ -1,0 +1,2807 @@
+---
+title: 'ENTREGA FINAL'
+author: "Albert Campano i Paula Alemany"
+date: "15 de Juny de 2018"
+output:
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introducció
+
+## Descripció de les dades
+
+Data Dictionary - SHL Trip Records -This data dictionary describes SHL trip data in visit http://www.nyc.gov/html/tlc/html/about/trip_record_data.shtml.    
+
+  - __VendorID:__	A code indicating the LPEP provider that provided the record.      1= Creative Mobile Technologies, LLC; 2= VeriFone Inc.   
+  - __lpep_pickup_datetime:__	The date and time when the meter was engaged.    
+  - __lpep_dropoff_datetime:__	The date and time when the meter was disengaged.     
+  - __Passenger_count:__	The number of passengers in the vehicle. This is a driver-entered value.    
+  - __Trip_distance:__ 	The elapsed trip distance in miles reported by the taximeter.   
+  - __Pickup_longitude:__	 Longitude where the meter was engaged.   
+  - __Pickup_latitude:__	Latitude where the meter was engaged.   
+  - __RateCodeID:__	The final rate code in effect at the end of the trip.  1= Standard rate  2=JFK 3=Newark 4=Nassau or Westchester 5=Negotiated fare 6=Group ride   
+  - __Store_and_fwd_flag:__	This flag indicates whether the trip record was held in vehicle memory before sending to the vendor, aka "store and forward," because the vehicle did not have a connection to the server: Y= store and forward trip  N= not a store and forward trip   
+  - __Dropoff_longitude:__	Longitude where the meter was timed off.   
+  - __Dropoff_latitude:__	Latitude where the meter was timed off.   
+  - __Payment_type:__	A numeric code signifying how the passenger paid for the trip.  1= Credit card 2= Cash 3= No charge 4= Dispute 5= Unknown 6= Voided trip   
+  - __Fare_amount:__	The time-and-distance fare calculated by the meter.   
+  - __Extra:__	 Miscellaneous extras and surcharges.  Currently, this only includes the $0.50 and $1 rush hour and overnight charges. 
+  - __MTA_tax:__	 $0.50 MTA tax that is automatically triggered based on the metered rate in use.    
+  - __Improvement_surcharge:__	$0.30 improvement surcharge assessed on hailed trips at the flag   drop. The improvement surcharge began being levied in 2015.   
+  - __Tip_amount:__	 This field is automatically populated for credit card tips. Cash tips are not included.   
+  - __Tolls_amount:__	Total amount of all tolls paid in trip.    
+  - __Total_amount:__	The total amount charged to passengers. Does not include cash tips.   
+  - __Trip_type:__	A code indicating whether the trip was a street-hail or a dispatch that is automatically assigned based on the metered rate in use but can be altered by the driver. 
+1= Street-hail 2= Dispatch  
+
+
+
+
+# Directori de treball i càrrega de paquets
+
+Configurem el entorn de treball:
+
+```{r, }
+#Set Working directory
+ #setwd("C:/Users/Paula Alemany/Desktop/PAULA/E.INFORMÀTICA-QP18/ADEI/NYCABS")
+setwd("~/ADEI/Final")
+
+# Load Required Packages: to be increased over the course
+requiredPackages <- c("effects","FactoMineR","car", "factoextra","RColorBrewer","ggplot2","missMDA","mvoutlier","AER","factoextra")
+missingPackages <- requiredPackages[!(requiredPackages %in% installed.packages()[,"Package"])]
+
+options(contrasts=c('contr.treatment','contr.treatment'))
+
+if(length(missingPackages)) install.packages(missingPackages)
+lapply(requiredPackages, require, character.only = TRUE)
+```
+
+
+
+
+# Funcions útils
+
+```{r, echo=FALSE}
+# Some useful functions
+calcQ <- function(x) {
+  s.x <- summary(x)
+  iqr<-s.x[5]-s.x[2]
+  list(souti=s.x[2]-3*iqr, mouti=s.x[2]-1.5*iqr, min=s.x[1], q1=s.x[2], q2=s.x[3], 
+       q3=s.x[5], max=s.x[6], mouts=s.x[5]+1.5*iqr, souts=s.x[5]+3*iqr ) }
+
+countNA <- function(x) {
+  mis_x <- NULL
+  for (j in 1:ncol(x)) {mis_x[j] <- sum(is.na(x[,j])) }
+  mis_x <- as.data.frame(mis_x)
+  rownames(mis_x) <- names(x)
+  mis_i <- rep(0,nrow(x))
+  for (j in 1:ncol(x)) {mis_i <- mis_i + as.numeric(is.na(x[,j])) }
+  list(mis_col=mis_x,mis_ind=mis_i) }
+
+countX <- function(x,X) {
+  n_x <- NULL
+  for (j in 1:ncol(x)) {n_x[j] <- sum(x[,j]==X) }
+  n_x <- as.data.frame(n_x)
+  rownames(n_x) <- names(x)
+  nx_i <- rep(0,nrow(x))
+  for (j in 1:ncol(x)) {nx_i <- nx_i + as.numeric(x[,j]==X) }
+  list(nx_col=n_x,nx_ind=nx_i) }
+
+man.dist.manual <- function(p1Lat, p1Lon, p2Lat, p2Lon) {
+  #return(abs(pointDistance(c(p1$lon, p1$lat), c(p1$lon, p2$lat), longlat=TRUE)) + abs(pointDistance(c(p2$lon, p1$lat), c(p2$lon, p2$lat), longlat=TRUE)))
+  R = 6371
+  lat1 = degrees.to.radians(p1Lat)
+  lon1 = degrees.to.radians(p1Lon)
+  lat2 = degrees.to.radians(p2Lat)
+  lon2 = degrees.to.radians(p2Lon)
+  A_lat = lat2 - lat1
+  A_lon = lon2 - lon1
+  a = sin(A_lat/2)^2
+  c = 2 * atan2(sqrt(a), sqrt(1-a))
+  dist_lat = R * c
+  a = sin(A_lon/2)^2
+  c = 2 * atan2(sqrt(a), sqrt(1-a))
+  dist_lon = R * c
+  abs(dist_lat) + abs(dist_lon)
+  return(abs(dist_lat) + abs(dist_lon))
+}
+
+degrees.to.radians<-function(value) {
+  return(value*0.0174532925)
+}
+
+degrees.to.radians<-function(value) {
+  return(value*0.0174532925)
+}
+```
+
+
+
+
+# Dades
+
+## Seleccionant les 5000 dades
+
+Seleccionem una submostra aleatoria de 5000 dades:
+
+```{r}
+df <- read.table("green_tripdata_2016-01.csv", header = T, sep=",")
+set.seed(07111995)
+
+# Seleccionem 5000 files aleatories
+sam1 <- sample(1:nrow(df),5000)
+sam <- as.vector(sort(sam1))
+
+# Em quedo amb la submostra de 5000 files
+df <- df[sam,]
+
+# Guardem les dades
+save.image("Taxi5000_rawdata.RData")
+```
+
+
+# title: 'ENTREGA 1: Data Quality Report, Imputation and Profiling'
+
+Carreguem les dades:
+
+```{r, echo=FALSE}
+load("Taxi5000_rawdata.RData")
+```
+
+
+
+## Tractament de les variables 
+
+Inicialitzem els contadors de missings, errors i outliers:
+
+```{r, echo=FALSE}
+missings <- rep(0, 20)
+errors <- rep(0,20)
+outliers <- rep(0,20)
+```
+
+Inicialitzo la variable time, càlcul de la duració del viatge:
+
+```{r, echo=FALSE}
+df$time <- 0 
+```
+
+Inicialitzo les variables de contadors individuals per missings, errors i outliers:
+
+```{r, echo=FALSE}
+df$missings_indiv <- 0
+df$errors_indiv <- 0
+df$outliers_indiv <- 0
+```          
+
+
+
+## Depuració
+
+### VendorID
+
+```{r}
+table(df$VendorID)
+```
+
+Podem veure clarament que hi ha dos factors i que no ens falten dades.
+
+```{r}
+df$VendorID<-factor(df$VendorID,labels=c("Mobile","VeriFone"))
+table(df$VendorID)
+barplot(table(df$VendorID))
+```
+
+Aquí el nombre de dades que tenen missings, errors i outliers és 0.
+
+
+
+
+### lpep_pickup_datetime  --> pickup_datetime
+
+Canviem el nom a la variable perquè sigui més intel·ligible.
+
+```{r echo=FALSE}
+colnames(df)[2] <- "pickup_datetime"
+```
+
+Donem a la data un format per poder treballar amb les dades.
+
+```{r}
+df$pickup_datetime <- strptime(df$pickup_datetime, "%Y-%m-%d %H:%M:%S")
+summary(df$pickup_datetime)
+```
+
+Podem observar que el nostre interval de dates està en el mes de gener de l'any 2016.
+
+Aquí el nombre de dades que tenen missings, errors i outliers és 0.
+
+
+
+
+### Lpep_dropoff_datetime --> dropoff_datetime
+
+Canviem el nom a la variable perquè sigui més intel·ligible.
+
+```{r, echo=FALSE}
+colnames(df)[3] <- "dropoff_datetime"
+```
+
+Donem a la data un format per poder treballar amb les dades.
+
+```{r}
+df$dropoff_datetime <- strptime(df$dropoff_datetime, "%Y-%m-%d %H:%M:%S")
+summary(df$dropoff_datetime)
+```
+
+Podem observar que el nostre interval de dates està en el mes de gener de l'any 2016.
+
+Aquí el nombre de dades que tenen missings, errors i outliers és 0.
+
+
+
+
+### Store_and_fwd_flag
+
+```{r}
+table(df$Store_and_fwd_flag)
+```
+
+Com que la mostra de dades no és significant, prescindirem d'aquesta variable.
+
+```{r, echo=FALSE}
+df$Store_and_fwd_flag <- NULL
+```
+
+
+
+
+### RateCodeID
+
+```{r}
+table(df$RateCodeID)
+```
+
+No falten dades, "Standard rate" és clarament predominant, per poder treballar millor, farem un factor de dos valors:
+  - Standard rate
+  - Others
+
+```{r, echo=FALSE}
+sel1 <- which(df$RateCodeID == 1)
+sel2 <- which(df$RateCodeID != 1)
+df[sel2, "RateCodeID"] <- 2
+df$RateCodeID<-factor(df$RateCodeID,labels=c("Standard rate","Others"))
+```
+
+```{r}
+table(df$RateCodeID)
+barplot(table(df$RateCodeID))
+```
+
+Aquí el nombre de dades que tenen missings, errors i outliers és 0.
+
+
+
+### Pickup_longitude
+
+```{r}
+summary(df$Pickup_longitude)
+#hist(df$Pickup_longitude)
+```
+
+En la longitud hem agafat un marge que va des de -74,5 a -73,5. En aquest
+interval està continguda la ciutat de Nova York.
+
+En cas que algun valor surti d'aquest rang haurem d'analitzar per tal de concretar si és un error o realment el taxi estava en aquella posició.
+
+```{r}
+sel <- which(df$Pickup_longitude >= -73.5 | df$Pickup_longitude <= -74.5)
+df[sel,"Pickup_longitude"]
+```
+
+El primer el tractem com a error, ja que s'ha fet un recorregut en taxi a 100 km de la ciutat i això és un error clarament.
+
+```{r, echo=FALSE}
+#df[sel[1],] 
+errors[5] <- errors[5] + 1
+df[sel[1], "errors_indiv"] <- df[sel[1], "errors_indiv"] + 1
+```
+
+Tractem els 0 com a NA (missing data):
+
+```{r, echo=FALSE}
+missings[5] <- length(sel) - 1
+df[sel[2:length(sel)], "missings_indiv"] <- df[sel[2:length(sel)], "missings_indiv"] + 1
+df[sel, "Pickup_longitude"] <- NA
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Pickup_longitude)
+Boxplot(df$Pickup_longitude)
+abline(h=c(out$souts,-74.08),col="red",lwd=2)
+sel <- which(df$Pickup_longitude >= out$souts | df$Pickup_longitude <= -74.08)
+length(sel)
+```
+
+Eliminem els 8 outliers que ens han sortit:
+
+```{r, echo=FALSE}
+outliers[5]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+df[sel, "Pickup_longitude"] <- NA
+```
+
+```{r}
+summary(df$Pickup_longitude)
+hist(df$Pickup_longitude,30)
+```
+
+
+
+
+### Pickup_latitude
+
+```{r}
+summary(df$Pickup_latitude)
+#hist(df$Pickup_latitude)
+```
+
+En la latitud hem agafat un marge que va des de 40 a 41. En aquest
+interval està continguda la ciutat de Nova York.
+
+En cas que algun valor surti d'aquest rang haurem d'analitzar per tal de concretar si és un error o realment el taxi estava en aquella posició.
+
+```{r}
+sel <- which(df$Pickup_latitude >= 41 | df$Pickup_latitude <= 40)
+df[sel,"Pickup_latitude"]
+```
+
+Tractem els 0 com a NA (missing data):
+
+```{r, echo=FALSE}
+df[sel, "Pickup_latitude"] <- NA
+missings[6] <- length(sel)
+df[sel, "missings_indiv"] <- df[sel, "missings_indiv"] + 1
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Pickup_latitude)
+Boxplot(df$Pickup_latitude)
+abline(h=c(out$souts,40.5),col="red",lwd=2)
+sel <- which(df$Pickup_latitude <= 40.5)
+length(sel)
+```
+
+Només tenim un outlier.
+
+```{r, echo=FALSE}
+outliers[6]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+df[sel, "Pickup_latitude"] <- NA
+```
+
+```{r}
+summary(df$Pickup_latitude)
+hist(df$Pickup_latitude,20)
+```
+
+
+
+
+### Dropoff_longitude
+
+```{r}
+summary(df$Dropoff_longitude)
+#hist(df$Dropoff_longitude)
+```
+
+En la longitud hem agafat un marge que va des de -74,5 a -73,5. En aquest
+interval està continguda la ciutat de Nova York.
+
+En cas que algun valor surti d'aquest rang haurem d'analitzar per tal de concretar si és un error o realment el taxi estava en aquella posició.
+
+```{r}
+sel <- which(df$Dropoff_longitude >= -73.5 | df$Dropoff_longitude <= -74.5)
+df[sel,"Dropoff_longitude"]
+```
+
+S'ha fet un recorregut en taxi a 100 km de la ciutat. Això és un error clarament.
+
+```{r, echo=FALSE}
+#df[sel[1],]
+df[sel[1], "Dropoff_longitude"] <- NA 
+errors[7]<- errors[7] + 1
+df[sel[1], "errors_indiv"] <- df[sel[1], "errors_indiv"] + 1
+```
+
+Tractem els 0 com a NA (missing data):
+
+```{r, echo=FALSE}
+df[sel[2:length(sel)], "Dropoff_longitude"] <- NA
+missings[7]<-length(sel) - 1
+df[sel[2:length(sel)], "missings_indiv"] <- df[sel[2:length(sel)], "missings_indiv"] + 1
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Dropoff_longitude)
+Boxplot(df$Dropoff_longitude)
+abline(h=c(out$souts,-74.08),col="red",lwd=2)
+sel <- which(df$Dropoff_longitude >= out$souts | df$Dropoff_longitude <= -74.08)
+length(sel)
+```
+
+Eliminem els 9 outliers que ens han sortit:
+
+```{r,echo=FALSE}
+outliers[7]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+df[sel, "Dropoff_longitude"] <- NA
+```
+
+```{r}
+summary(df$Dropoff_longitude)
+hist(df$Dropoff_longitude,30)
+```
+
+
+
+
+### Dropoff_latitude
+
+```{r}
+summary(df$Dropoff_latitude)
+#hist(df$Dropoff_latitude)
+```
+
+En la latitud hem agafat un marge que va des de 40 a 41. En aquest
+interval està continguda la ciutat de Nova York.
+
+En cas que algun valor surti d'aquest rang haurem d'analitzar per tal de concretar si és un error o realment el taxi estava en aquella posició.
+
+```{r}
+sel <- which(df$Dropoff_latitude >= 41 | df$Dropoff_latitude <= 40)
+df[sel,"Dropoff_latitude"]
+```
+
+Tractem els 0 com a NA (missing data):
+
+```{r, echo=FALSE}
+df[sel, "Dropoff_latitude"] <- NA
+missings[8] <- length(sel)
+df[sel, "missings_indiv"] <- df[sel, "missings_indiv"] + 1
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Dropoff_latitude)
+Boxplot(df$Dropoff_latitude)
+abline(h=c(out$souts,40.51),col="red",lwd=2)
+sel <- which(df$Dropoff_latitude < 40.51)
+length(sel)
+```
+
+Només tenim un outlier.
+
+```{r, echo=FALSE}
+outliers[8]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+df[sel, "Dropoff_latitude"] <- NA
+```
+
+```{r}
+summary(df$Dropoff_latitude)
+hist(df$Dropoff_latitude,20)
+```
+
+
+
+
+### Passenger_count
+
+```{r}
+table(df$Passenger_count)
+#hist(df$Passenger_count)
+```
+
+Podem observar que hi ha només dos casos on el nombre de passatgers és igual a 0. Un dels casos es veu clarament que es tracta d'una fila que té dades bastant anormals (ens podem fixar amb les variables: temps, distancia, total amount) i el més possible és que en un futur s'acabi eliminant. L'altre podem canviar el valor a 1 com si fos el viatge que transporta alguna cosa per algú.
+
+```{r}
+sel <- which(df$Passenger_count == 0)
+df[sel,]
+```
+
+No tractem com error la primera fila que hem obtingut amb 0 passatgers, ja que el tractem com si fos un viatge que transporta algun objecte per algú que no hi és present al taxi. Fem imputació manualment, per tenir en compte les altres variables:
+
+```{r}
+df[sel[1],"Passenger_count"] <- 1
+```
+
+Podem detectar un missing ja que les dades que obtenim del segon trajecte no són gaire fiables.
+
+```{r, echo=FALSE}
+missings[1] <- 1
+df[sel[2], "missings_indiv"] <- df[sel[2], "missings_indiv"] + 1
+df[sel[2], "Passenger_count"] <- NA
+```
+
+En aquesta variable no tenim: outliers i errors.
+
+```{r}
+table(df$Passenger_count)
+barplot(table(df$Passenger_count))
+```
+
+Aquesta variable és possible tractar-la com a factor.
+
+
+
+
+### Trip_distance
+
+```{r}
+summary(df$Trip_distance)
+#hist(df$Trip_distance,40)
+```
+
+No tenim distàncies negatives.
+
+Tractem els 0 com a NA's:
+
+```{r,echo=FALSE}
+sel <- which(df$Trip_distance == 0)
+df[sel, "Trip_distance"] <- NA
+missings[10] <- length(sel)
+df[sel, "missings_indiv"] <- df[sel, "missings_indiv"] + 1
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Trip_distance)
+Boxplot(df$Trip_distance)
+abline(h=c(20,out$souti),col="red",lwd=2)
+sel <- which(df$Trip_distance >= 20)
+length(sel)
+```
+
+En aquesta variable preferim pujar la "línia" dels outliers a 20 milles i, per tant, detectem 6 outliers.
+
+```{r,echo=FALSE}
+outliers[10]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+df[sel, "Trip_distance"] <- NA
+```
+
+```{r}
+summary(df$Trip_distance)
+hist(df$Trip_distance,30)
+```
+
+Podem apreciar que els trajectes curts són molt més freqüents que els llargs.
+
+
+
+
+### Fare_amount
+
+```{r}
+summary(df$Fare_amount)
+#hist(df$Fare_amount)
+```
+
+Tractem els negatius com a errors i els 0 com a NA's:
+
+```{r, echo=0}
+sel <- which(df$Fare_amount == 0)
+df[sel, "Fare_amount"] <- NA
+missings[11] <- length(sel)
+df[sel, "missings_indiv"] <- df[sel, "missings_indiv"] + 1
+
+sel <- which(df$Fare_amount < 0)
+df[sel, "Fare_amount"] <- NA
+errors[11] <- length(sel)
+df[sel, "errors_indiv"] <- df[sel, "errors_indiv"] + 1
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Fare_amount)
+Boxplot(df$Fare_amount)
+abline(h=c(85,out$souti),col="red",lwd=2)
+sel <- which(df$Fare_amount >= 85)
+length(sel)
+```
+
+En aquesta variable preferim pujar la "línia" dels outliers a 85 dòlars i, per tant, detectem 3 outliers.
+
+```{r, echo=FALSE}
+outliers[11]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+df[sel, "Fare_amount"] <- NA
+```
+
+La majoria de les dades es concentra entre 0 i 40 dòlars:
+
+```{r}
+sel <- which(df$Fare_amount < 40 & df$Fare_amount > 0)
+hist(df[sel,"Fare_amount"], 30)
+```
+
+Podem apreciar que hi ha molta gent amb trajectes curts (preu més petit) i a mesura que el trajecte es fa més gran disminueix la quantitat de gent.
+
+```{r}
+summary(df$Fare_amount)
+hist(df$Fare_amount,30)
+```
+
+Òbviament, si la majoria de viatges són curts, la majoria de preus seran baixos.
+
+
+
+
+### Extra
+
+```{r}
+table(df$Extra)
+#hist(df$Extra)
+```
+
+Tractem els valors negatius com a errors, ja que la variable Extra només pot ser: 0, 0.5 o 1.
+
+```{r, echo=FALSE}
+sel <- which(df$Extra < 0)
+df[sel, "Extra"] <- NA
+errors[12] <- length(sel)
+df[sel, "errors_indiv"] <- df[sel, "errors_indiv"] + 1
+```
+
+```{r}
+table(df$Extra)
+barplot(table(df$Extra))
+```
+
+Aquesta variable és possible tractar-la com a factor.
+
+
+
+
+### MTA_tax
+
+```{r}
+table(df$MTA_tax)
+#hist(df$MTA_tax)
+```
+
+Tractem els valors negatius com a errors, ja que la variable MTA_tax només pot ser: 0 o 0.5. 
+
+```{r, echo=FALSE}
+sel <- which(df$MTA_tax < 0)
+df[sel, "MTA_tax"] <- NA
+errors[13] <- length(sel)
+df[sel, "errors_indiv"] <- df[sel, "errors_indiv"] + 1
+```
+
+```{r}
+table(df$MTA_tax)
+barplot(table(df$MTA_tax))
+```
+
+Aquesta variable és possible tractar-la com a factor.
+
+
+
+
+### Tip_amount
+
+```{r}
+summary(df$Tip_amount)
+#hist(df$Tip_amount)
+```
+
+No s'observen ni missings ni errors.
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$Tip_amount)
+Boxplot(df$Tip_amount)
+abline(h=c(21,out$souti),col="red",lwd=2)
+sel <- which(df$Tip_amount >= 21)
+length(sel)
+```
+
+El nostre màxim de "Fare_amount" estava entorn dels 85 dòlars, si calculem que com a màxim obtindrem una propina del 25%, per tant, posarem el límit a 21 dòlars.
+
+Com que Tip_amount donarà pas a una variable target, no passarem els valors a NA sinó que els eliminarem directament. Però els tindrem en compte pel recompte d'outliers de la variable.
+
+```{r, echo=FALSE}
+outliers[14]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1 #No és necessari, s'eliminarà quan borrem la fila.
+df <- df[-sel,]
+```
+
+Ara podem apreciar que per a trajectes curts (que són majoritaris) es donen propines baixes, per tant, veiem una gran quantitat en propines de 0 a 4 dòlars.
+Hem eliminat els 0 (no propines) del gràfic per poder veure la tendència de la quantitat de les propines.
+
+```{r}
+summary(df$Tip_amount)
+hist(df$Tip_amount)
+propina <- which(df$Tip_amount > 0)
+no_propina <- which(df$Tip_amount == 0)
+#length(propina) : 2056
+#length(no_propina) : 2930
+```
+
+Podem observar que gairebé un 60% dels viatges que fan els taxistes no reben propina.
+
+```{r}
+hist(df[propina,"Tip_amount"], 40) 
+```
+
+Histograma sense tenir en compte el nombre de gent que no dóna propina.
+
+
+
+
+### Tolls_amount
+
+```{r}
+summary(df$Tolls_amount)
+hist(df$Tolls_amount)
+#length(which(df$Tolls_amount < 0))
+#length(which(df$Tolls_amount == 0))
+#length(which(df$Tolls_amount > 0)) 
+```
+
+Només hi ha 79 mostres diferents de 0. No es veuen errors, ni outliers, ni dades mancants.
+La majoria de gent no paga peatges, farem un factor de dos valors:
+- Toll
+- Not toll
+ 
+ 
+ 
+
+### Ehail_fee
+
+```{r}
+summary(df$Ehail_fee)
+```
+
+Aquesta variable només conté "NA". Com que és impossible estudiar aquesta variable, l'eliminarem. Això no vol dir que no influeixi en els nostres resultats, però no tenim forma d'analitzar-la.
+
+```{r, echo=FALSE}
+df$Ehail_fee<-NULL
+```
+
+
+
+
+### improvement_surcharge
+
+```{r}
+table(df$improvement_surcharge)
+#hist(df$improvement_surcharge)
+```
+
+Tractem els valors negatius com a errors, ja que la variable improvement_surcharge només pot ser: 0 o 0.3.
+
+```{r, echo=FALSE}
+sel <- which(df$improvement_surcharge < 0)
+df[sel, "improvement_surcharge"] <- NA
+errors[16] <- length(sel)
+df[sel, "errors_indiv"] <- df[sel, "errors_indiv"] + 1
+```
+
+En aquesta variable no tenim: missings i outliers.
+
+```{r}
+table(df$improvement_surcharge)
+barplot(table(df$improvement_surcharge))
+```
+
+Aquesta variable és possible tractar-la com a factor.(Possible discretització 0 - 0.3)
+
+
+
+
+### Total_amount
+
+Donat que no podem modificar res del nostre target eliminarem aquelles dades que siguin errors, missings o outliers.
+
+Eliminem les files corresponents a un total amount amb valors més petits o iguals a 0:
+
+```{r, echo=FALSE}
+sel <- which(df$Total_amount <= 0)
+length(sel)
+df <- df[-sel,]
+```
+
+Com que paguem 85 dòlars més la propina máxima de 25% posarem el limit en 106 (no contarem aqui altres taxes menors).
+
+```{r}
+out=calcQ(df$Total_amount)
+Boxplot(df$Total_amount)
+abline(h=c(106,out$souti),col="red",lwd=2)
+sel <- which(df$Total_amount >= 106)
+length(sel)
+```
+
+Eliminem les files dels outliers:
+
+```{r, echo=FALSE}
+df <- df[-sel,]
+```
+
+```{r}
+summary(df$Total_amount)
+hist(df$Total_amount,30)
+```
+
+Podem apreciar que la gran majoria de viatges són d'un cost d'entre 5 i 15 dòlars. És a dir, que la gent que acostuma a agafar taxis verds és per trajectes curts i d'un cost baix.
+
+
+
+
+
+### Payment_type
+
+```{r}
+table(df$Payment_type)
+```
+
+Podem observar 4 factors. Els dos últims factors no tenen dades que tinguin gaire pes, ja que és una minoria la que efectua aquest tipus de pagament. La gran majoria de pagaments estan efectuats amb targeta o en metàl·lic. Per tant, agrupem els dos últims factors en una única categoria que representarà la resta:
+
+```{r}
+sel34 <- which(df$Payment_type == 3 | df$Payment_type == 4)
+df[sel34, "Payment_type"] <- 3
+df$Payment_type<-factor(df$Payment_type,labels=c("Credit card","Cash","Others"))
+```
+
+```{r}
+table(df$Payment_type)
+barplot(table(df$Payment_type))
+```
+
+En aquest gràfic es pot apreciar clarament que el nombre de viatges que es paguen en targeta i el nombre de viatges que es paguen en metàl·lic estan molt igualats.
+
+
+### Trip_type
+
+```{r}
+table(df$Trip_type)
+```
+
+Res a remarcar, possible explicació de tan pocs "Dispatch".
+
+```{r}
+df$Trip_type<-factor(df$Trip_type,labels = c("Street-hail","Dispatch"))
+table(df$Trip_type)
+barplot(table(df$Trip_type))
+```
+
+En aquesta gràfica podem observar que la gran majoria para el taxi directament al carrer.
+
+
+
+
+# Noves Variables
+
+## Definition of binary outcome: AnyTip
+
+Crea un target binari, defineix llistes de variables numèriques i qualitatives.
+
+```{r}
+# Binary Target: Any Tip
+df$AnyTip<-ifelse(df$Tip_amount<0.0001,0,1)
+df$AnyTip<-factor(df$AnyTip,labels=c("No","Yes"))
+levels(df$AnyTip)<-paste("AnyTip.",sep="",levels(df$AnyTip))
+```
+
+```{r}
+table(df$AnyTip)
+barplot(table(df$AnyTip))
+```
+
+Aquí el nombre de dades que tenen missings, errors i outliers és 0. Això és degut al fet que ens hem ocupat dels outliers, errors i missings quan hem tractat la variable Tip_amount que és la que dóna lloc aquesta nova variable. Al tractar-se d'un target, hem eliminat totes aquelles files que contenien un error, un missing o un outlier a la variable Tip_amount.
+
+## Duració del trajecte
+
+Definim la durada del trajecte com la diferència entre les dates de l'inici i el final del trajecte, corresponents a les variables pickup_datetime i dropoff_datetime. La unitat de temps d'aquesta variable està en minuts.
+
+```{r}
+df$time<-difftime(df$dropoff_datetime, df$pickup_datetime, units = c("min")) 
+df$time<-as.integer(df$time)
+summary(df$time)
+```
+
+Tractem els 0 com a NA (missing data):
+
+```{r, echo=FALSE}
+sel<-which(df$time == 0.0)
+#length(sel)
+df[sel, "time"] <- NA
+missings[which(names(df) == "time")] <- length(sel)
+df[sel, "missings_indiv"] <- df[sel, "missings_indiv"] + 1
+```
+
+Ara busquem els outliers:
+
+```{r}
+out=calcQ(df$time)
+Boxplot(df$time)
+abline(h=c(120,out$souti),col="red",lwd=2)
+sel <- which(df$time >= 120)
+length(sel)
+```
+
+Definim com outliers tots aquells trajectes que tarden més de dos hores:
+
+```{r,echo=FALSE}
+df[sel, "time"] <- NA
+outliers[which(names(df) == "time")]<- length(sel)
+df[sel, "outliers_indiv"] <- df[sel, "outliers_indiv"] + 1
+```
+
+No hem detectat cap error.
+
+```{r}
+summary(df$time)
+hist(df$time,10)
+```
+
+
+
+## Data quality report 
+
+### Vars
+
+ [1] "VendorID"              "pickup_datetime"       "dropoff_datetime"     
+ [4] "RateCodeID"            "Pickup_longitude"      "Pickup_latitude"      
+ [7] "Dropoff_longitude"     "Dropoff_latitude"      "Passenger_count"      
+[10] "Trip_distance"         "Fare_amount"           "Extra"                
+[13] "MTA_tax"               "Tip_amount"            "Tolls_amount"         
+[16] "improvement_surcharge" "Total_amount"          "Payment_type"         
+[19] "Trip_type"             "time"                  "missings_indiv"       
+[22] "errors_indiv"          "outliers_indiv"        "AnyTip"               
+
+```{r}
+#names(df)
+vars_con<-names(df)[c(5,6,7,8,9,10,11,12,13,14,15,16,20)] #numeriques
+vars_dis<-names(df)[c(1,4,18,19)] #factors
+vars_res<-names(df)[c(17,24)] #targets
+```
+
+
+
+```{r}
+missings
+errors
+outliers
+suma <- missings + errors
+index <- rev(order(suma))
+ranking_vars <- names(df)[index]
+ranking_vars
+```
+
+
+
+### Individuals
+
+```{r}
+sel_missings <- which(df$missings_indiv != 0)
+df[sel_missings,"missings_indiv"]
+sel_errors <- which(df$errors_indiv != 0)
+df[sel_errors,"errors_indiv"]
+sel_outliers <- which(df$outliers_indiv != 0)
+df[sel_outliers,"outliers_indiv"]
+```
+
+```{r}
+df$total_indiv <- df$missings_indiv + df$errors_indiv + df$outliers_indiv
+sel_aux <- which(df$total_indiv >= 3)
+df[sel_aux, "total_indiv"]
+```
+
+##Correlation "sum_errors" with all other vars
+
+```{r}
+#Posar el numero de les variables que volem comparar
+vars_errors <- names(df)[c(9:17)]
+correlation_error <- cor(df[,vars_errors], df$sum_errors, use = "pairwise.complete.obs")
+correlation_error
+```
+
+
+
+
+# Imputation
+
+## Imputation of numeric variables
+
+```{r}
+library(missMDA)
+
+# vars_con
+# summary(df[,vars_con])
+
+vars_con_mis<-vars_con[c(1:4,6,7,13)];
+# length(vars_con_mis)
+
+#summary(df[,vars_con_mis])
+#?estim_ncpPCA
+nb <- estim_ncpPCA(df[,vars_con_mis],ncp.min=0,ncp.max=5,method.cv="Kfold",nbsim=20,pNA=0.05)
+
+#IMPUTACIÓ: variables on tinc NA
+res.comp <- imputePCA(df[,vars_con_mis],ncp=4)
+attributes(res.comp)
+#summary(res.comp$completeObs)
+```
+
+Validem una per una cada variable imputada:
+
+### Pickup_longitude
+
+```{r}
+# Mirar els dos boxplot, comprovar que són semblants i que no puc percebre cap canvi. També comprovar el quantile.
+
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"Pickup_longitude"])
+Boxplot(df$Pickup_longitude)
+
+quantile(df$Pickup_longitude,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"Pickup_longitude"],seq(0,1,0.2))
+
+df[,"Pickup_longitude"]<-res.comp$completeObs[,"Pickup_longitude"]
+```
+
+### Pickup_latitude
+
+```{r}
+# Mirar els dos boxplot, comprovar que són semblants i que no puc percebre cap canvi. També comprovar el quantile.
+
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"Pickup_latitude"])
+Boxplot(df$Pickup_latitude)
+
+quantile(df$Pickup_latitude,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"Pickup_latitude"],seq(0,1,0.2))
+
+df[,"Pickup_latitude"]<-res.comp$completeObs[,"Pickup_latitude"]
+```
+
+### Dropoff_longitude
+
+```{r}
+# Mirar els dos boxplot, comprovar que són semblants i que no puc percebre cap canvi. També comprovar el quantile.
+
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"Dropoff_longitude"])
+Boxplot(df$Dropoff_longitude)
+
+quantile(df$Dropoff_longitude,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"Dropoff_longitude"],seq(0,1,0.2))
+
+df[,"Dropoff_longitude"]<-res.comp$completeObs[,"Dropoff_longitude"]
+```
+
+### Dropoff_latitude
+
+```{r}
+# Mirar els dos boxplot, comprovar que són semblants i que no puc percebre cap canvi. També comprovar el quantile.
+
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"Dropoff_latitude"])
+Boxplot(df$Dropoff_latitude)
+
+quantile(df$Dropoff_latitude,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"Dropoff_latitude"],seq(0,1,0.2))
+
+df[,"Dropoff_latitude"]<-res.comp$completeObs[,"Dropoff_latitude"]
+```
+
+### Trip_distance
+
+```{r}
+# Mirar els dos boxplot, comprovar que són semblants i que no puc percebre cap canvi. També comprovar el quantile.
+
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"Trip_distance"])
+Boxplot(df$Trip_distance)
+
+quantile(df$Trip_distance,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"Trip_distance"],seq(0,1,0.2))
+
+df[,"Trip_distance"]<-res.comp$completeObs[,"Trip_distance"]
+```
+
+### Fare_amount
+
+```{r}
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"Fare_amount"])
+Boxplot(df$Fare_amount)
+
+quantile(df$Fare_amount,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"Fare_amount"],seq(0,1,0.2))
+
+df[,"Fare_amount"]<-res.comp$completeObs[,"Fare_amount"]
+```
+
+### time
+
+```{r}
+par(mfrow=c(1,2))
+Boxplot(res.comp$completeObs[,"time"])
+Boxplot(df$time)
+
+quantile(df$time,na.rm=T,seq(0,1,0.2))
+quantile(res.comp$completeObs[,"time"],seq(0,1,0.2))
+
+df[,"time"]<-res.comp$completeObs[,"time"]
+```
+
+```{r, echo=FALSE}
+par(mfrow=c(1,1))
+```
+
+
+
+
+# Noves Variables - numèriques
+
+## Distància: Trip distance en km 
+
+```{r}
+df$Trip_distance_km <- df$Trip_distance * 1.6093
+```
+
+```{r}
+summary(df$Trip_distance_km)
+hist(df$Trip_distance_km,30)
+```
+
+Aquesta variable s'ha creat per poder canviar les unitats de la distància del trajecte de km a milles. Com hem detectat els errors, outliers i missings a la variable Trip_distance, no és necessari detectar-los aqui.
+ 
+## Manhattan_distance
+
+Creem la variable distància a Manhattan que ens servirà per comparar-la amb Trip_distance_km i així poder detectar si hi ha dades incorrectes.
+
+```{r}
+df$man_distance <- man.dist.manual(df$Pickup_latitude, df$Pickup_longitude, df$Dropoff_latitude, df$Dropoff_longitude)
+```
+
+## Velocitat en km/h
+
+```{r}
+df$speed <- df$Trip_distance_km/(df$time/60)
+summary(df$speed)
+```
+
+Si definim que com a màxim podem tenir una velocitat de 80 km/h, detectem dos outliers més que si el màxim fos 90. He mirat les dades corresponents als dos casos on la velocitat està entre 80-90 km/h i no es pot percebre un canvi gaire gran.
+Per tant, només tractarem com outliers les velocitats per sobre dels 90 km/h. Trobem 5 casos. Aquests casos els podem separar en dos subgrups: els que detectem que el problema és la distància i els que detectem que hi ha un problema amb el temps. (3->problemes amb la distància, 2->problemes amb el temps).
+
+```{r}
+Boxplot(df$speed)
+sel<- which(df$speed > 90)
+df[sel,]
+
+sel1<-which((df[sel,"Trip_distance_km"]-df[sel,"man_distance"]) > 1.8 & (df[sel,"Trip_distance_km"]-df[sel,"man_distance"]) > -1.8)
+sel1<- sel[sel1]
+```
+
+Fem imputació dels 3 casos on detectem que el problema està en la distància amb la distància a Manhatan, de totes maneres observem que les distàncies no arriben ni als 10 metres eliminarem els individus.
+
+```{r, echo=FALSE}
+df<-df[-sel1,]
+```
+
+Els dos altres casos modificarem manualment les dades i recalculem la velocitat: 
+
+```{r}
+sel<- which(df$speed > 90)
+df[sel,]
+df[sel[1],"time"]<- as.integer(mean(df[which(df[,"Trip_distance"] > 2.4 & df[,"Trip_distance"] < 3.2 ),"time"]))
+df[sel[2],"time"]<- as.integer(mean(df[which(df[,"Trip_distance"] > 5.8 & df[,"Trip_distance"] < 6.6 ),"time"]))
+df$speed <- df$Trip_distance_km/(df$time/60)
+```
+
+```{r}
+hist(df$speed,30)
+```
+
+
+
+
+# Discretization
+
+## Noves variables - factors
+
+### Factor passenger count
+
+```{r}
+df$f.Passenger_count<-factor(df$Passenger_count,labels=c("1p","2p","3p","4p","5p", "6p"))
+
+table(df$f.Passenger_count)
+barplot(table(df$f.Passenger_count))
+```
+
+Podem observar que la gran majoria de trajectes són d'un sol passatger. 
+
+## Factor Trip distance
+
+```{r}
+pp<-quantile(df$Trip_distance); pp
+df$f.Trip_distance<-factor(cut(df$Trip_distance,pp,include.lowest = TRUE))
+
+table(df$f.Trip_distance)
+barplot(table(df$f.Trip_distance))
+```
+
+### Factor Trip_distance_km
+
+```{r}
+pp<-quantile(df$Trip_distance_km); pp
+df$f.Trip_distance_km<-factor(cut(df$Trip_distance_km,pp,include.lowest = TRUE))
+
+table(df$f.Trip_distance_km)
+barplot(table(df$f.Trip_distance))
+```
+
+### Factor Fare_amount
+
+```{r}
+pp<-quantile(df$Fare_amount); pp
+df$f.Fare_amount<-factor(cut(df$Fare_amount,pp,include.lowest = TRUE))
+
+table(df$f.Fare_amount)
+barplot(table(df$f.Fare_amount))
+```
+
+### Factor Tolls_amount
+
+```{r}
+sel <- which(df$Tolls_amount > 0)
+df[sel,"Tolls_amount"]<-1
+
+df$f.Tolls_amount<-factor(df$Tolls_amount,labels=c("Not Toll","Toll"))
+
+table(df$f.Tolls_amount)
+barplot(table(df$f.Tolls_amount))
+```
+
+### Factor franges del dia
+
+```{r}
+df$f.pickup_hora<-as.integer(substr(strptime(df$pickup_datetime, "%Y-%m-%d %H:%M:%S"), 12, 13))
+
+sel <- which(df$f.pickup_hora >= 0 & df$f.pickup_hora < 6)
+sel1 <-which(df$f.pickup_hora >= 6 & df$f.pickup_hora < 12)
+sel2 <-which(df$f.pickup_hora >= 12 & df$f.pickup_hora < 18)
+sel3 <- which(df$f.pickup_hora >= 18 & df$f.pickup_hora <= 23)
+
+df[sel, "f.pickup_hora"]<-1
+df[sel1, "f.pickup_hora"]<-2
+df[sel2, "f.pickup_hora"]<-3
+df[sel3, "f.pickup_hora"]<-4
+
+df$f.pickup_hora<-factor(df$f.pickup_hora,labels=c("[00-06)","[06-12)","[12-18)","[18-00)"))
+
+table(df$f.pickup_hora)
+barplot(table(df$f.pickup_hora))
+```
+
+```{r}
+df$f.dropoff_hora<-as.integer(substr(strptime(df$dropoff_datetime, "%Y-%m-%d %H:%M:%S"), 12, 13))
+
+sel <- which(df$f.dropoff_hora >= 0 & df$f.dropoff_hora < 6)
+sel1 <-which(df$f.dropoff_hora >= 6 & df$f.dropoff_hora < 12)
+sel2 <-which(df$f.dropoff_hora >= 12 & df$f.dropoff_hora < 18)
+sel3 <- which(df$f.dropoff_hora >= 18 & df$f.dropoff_hora <= 23)
+
+df[sel, "f.dropoff_hora"]<-1
+df[sel1, "f.dropoff_hora"]<-2
+df[sel2, "f.dropoff_hora"]<-3
+df[sel3, "f.dropoff_hora"]<-4
+
+df$f.dropoff_hora<-factor(df$f.dropoff_hora,labels=c("[00-06)","[06-12)","[12-18)","[18-00)"))
+
+table(df$f.dropoff_hora)
+barplot(table(df$f.dropoff_hora))
+```
+
+### Factor MTA_tax
+
+```{r}
+sel <- which(df$MTA_tax == 0.5)
+df[sel,"MTA_tax"]<- 1
+
+df$f.MTA_tax<-factor(df$MTA_tax,labels=c("0","0.5"))
+
+table(df$f.MTA_tax)
+barplot(table(df$f.MTA_tax))
+```
+
+### Factor Extra
+
+```{r}
+sel1 <- which(df$Extra == 0.5)
+sel2 <- which(df$Extra == 1)
+df[sel1,"Extra"]<- 1
+df[sel2,"Extra"]<- 2
+
+df$f.Extra<-factor(df$Extra,labels=c("0","0.5","1"))
+
+table(df$f.Extra)
+barplot(table(df$f.Extra))
+```
+
+### Factor improvement_surcharge
+
+```{r}
+sel <- which(df$improvement_surcharge == 0.3)
+df[sel,"improvement_surcharge"]<- 1
+
+df$f.improvement_surcharge<-factor(df$improvement_surcharge,labels=c("0","0.3"))
+
+table(df$f.improvement_surcharge)
+barplot(table(df$f.improvement_surcharge))
+```
+
+### Factor Total_amount
+
+```{r}
+pp<-quantile(df$Total_amount); pp
+df$f.Total_amount<-factor(cut(df$Total_amount,pp,include.lowest = TRUE))
+
+table(df$f.Total_amount)
+barplot(table(df$f.Total_amount))
+```
+
+### Factor Time
+
+```{r}
+pp<-quantile(df$time); pp
+df$f.Time<-factor(cut(df$time,pp,include.lowest = TRUE))
+
+table(df$f.Time)
+barplot(table(df$f.Time))
+```
+
+
+# Profiling
+
+Seleccionem noms:
+
+```{r}
+#names(df)
+vars_disc<-names(df)[c(1,4,18,19,24,29:40)]
+vars_cont<-names(df)[c(9:17,20,26,27,28)]
+```
+
+Carreguem els paquets necessaris:
+
+```{r, echo=FALSE}
+library(AER)
+library(FactoMineR)
+```
+
+Guardem la mostra sense identificar els nivells per nom de la variable:
+
+```{r}
+df1<-df #Em serveix perquè a l'hora de fer el catdes no m'aparegui dos cops el nom de la variable.
+```
+
+Identifiquem els nivells amb el nom de la variable a la qual pertanyen:
+
+```{r , echo=FALSE}
+levels(df$VendorID)<-paste("VendorId.",sep="",levels(df$VendorID))
+levels(df$RateCodeID)<-paste("RateCodeId.",sep="",levels(df$RateCodeID))
+levels(df$Payment_type)<-paste("PaymentType.",sep="",levels(df$Payment_type))
+levels(df$Trip_type)<-paste("TripType.",sep="",levels(df$Trip_type))
+levels(df$f.Passenger_count)<-paste("Passenger.",sep="",levels(df$f.Passenger_count))
+levels(df$f.Trip_distance)<-paste("TripDistance.",sep="",levels(df$f.Trip_distance))
+levels(df$f.Trip_distance_km)<-paste("TripDistanceKm.",sep="",levels(df$f.Trip_distance_km))
+levels(df$f.Fare_amount)<-paste("FareAmount.",sep="",levels(df$f.Fare_amount))
+levels(df$f.Tolls_amount)<-paste("TollsAmount.",sep="",levels(df$f.Tolls_amount))
+levels(df$f.pickup_hora)<-paste("PickupHora.",sep="",levels(df$f.pickup_hora))
+levels(df$f.dropoff_hora)<-paste("DropoffHora.",sep="",levels(df$f.dropoff_hora))
+levels(df$f.MTA_tax)<-paste("MTAtax.",sep="",levels(df$f.MTA_tax))
+levels(df$f.Extra)<-paste("Extra.",sep="",levels(df$f.Extra))
+levels(df$f.improvement_surcharge)<-paste("improvement.",sep="",levels(df$f.improvement_surcharge))
+levels(df$f.Total_amount)<-paste("TotalAmount.",sep="",levels(df$f.Total_amount))
+levels(df$f.Time)<-paste("Time.",sep="",levels(df$f.Time))
+```
+
+## Numeric Target (Total_Amount)
+
+```{r}
+t <- c(vars_cont,vars_disc)
+condes(df[,t],9)
+```
+
+Les variables numèriques més correlacionades amb el target numèric (Total_amount) són principalment:
+Fare_amount, distances, time i Tip_amount.
+
+També podem observar en el condes quines són les categories de les variables factors que són significativament més diferent a la mitjana global: f.Trip_distance, f.Trip_distance_km, f.Fare_amount, f.Total_amount i f.Time.
+El target incrementa significativament en les categories: Time.(16,92], TotalAmount.(17.3,81.3], FareAmount.(14.5,80], TripDistanceKm.(5.62,32.1], TripDistance.(3.49,20]. 
+En canvi, el target disminueix significament en les categories: TripDistanceKm.[0.0161,1.71], TripDistance.[0.01,1.06], TotalAmount.[0.07,7.8], FareAmount.[0.07,6.5], Time.[1,6].
+
+## Factor Target (AnyTip)
+
+```{r}
+t <- c(vars_cont,vars_disc) 
+catdes(df1[,t],18) # Utilitzo df1 per veure-ho més clar.
+```
+
+Analitzant les correlacions del target factor binari, AnyTip, amb les variables factor podem destacar que la variable payment_type. Podem destacar que el tipus de pagament quan es dóna propina és en totes les carreres amb targeta. En canvi, un 83% de les carreres que donen propina el tipus de pagament és en metàlic. Per tant, és molt possible que les propines que es dónen en metàl·lic no quedin registrades.
+També podem veure com afecta el target a les variables numèriques. Les que variables que canvien significativament el seu valor en funció de la categoria del target factor, són: Tip amount, total amount, distances.
+En el cas de AnyTip.No el tip amount i el total amount baixen respecte a la mitjana i les distàncies més petites i en la categoria yes del target és al contrari.
+
+```{r}
+save.image("Taxifi.RData")
+#load("Taxifi.RData")
+```
+
+
+# title: 'Entrega 2: PCA'
+
+Carreguem les dades de l'entrega 1:
+
+```{r}
+load("Taxifi.RData")
+```
+
+
+
+
+# Preparem PCA
+
+Primer utilitzarem totes les variables numèriques i els dos "targets" per a aplicar PCA.
+Els "targets" els passarem com a variables suplementàries.
+Com a variables suplementàries també agafarem el factor de l'hora i el factor del Total_amount.
+
+```{r, echo=FALSE}
+#names(df)
+
+sel <- c(5:17,20,24,26:28,34,35,39,40)
+vars_pca <- names(df[sel])
+
+f1 <- which(vars_pca == "AnyTip")
+f2 <- which(vars_pca == "f.pickup_hora")
+f3 <- which(vars_pca == "f.dropoff_hora")
+f4 <- which(vars_pca == "f.Total_amount")
+f5 <- which(vars_pca == "f.Time")
+
+#Podem afegir travel-time
+s_quali <- c(f1,f2,f3,f4,f5)
+s_quant <- which(vars_pca == "Total_amount")
+```
+
+```{r}
+vars_pca
+```
+
+# Apliquem PCA
+
+```{r}
+summary(df[,vars_pca])
+
+res.pca <- PCA(df[,vars_pca], quanti.sup = s_quant, quali.sup = s_quali)
+```
+
+# Valors propis (eigenvalues)
+
+Veiem que la suma dels valors propis és igual al nombre de variables actives (16):
+
+```{r}
+sum(res.pca$eig[,1])
+```
+
+Farem un analisis per saber quantes components em d'utilitzar.
+
+## Anàlisi numèrica
+
+```{r}
+vals <- t(round(res.pca$eig,2)) #Transposem per una millor lectura
+vals
+```
+
+Segons el criteri de Kàiser, hauríem d'agafar les 6 primeres components, ja que tenen un valor propi major que 1.
+Per poder simplificar els càlculs més endavant ens quedarem només amb les primeres 4 components. La variància acumulada d'aquestes 4 components és d'un 67%, podríem dir que dos terços de les nostres dades queden explicades amb aquestes 4 components.
+
+## Anàlisi gràfica
+
+```{r}
+library(factoextra)
+fviz_eig(res.pca, choice = "eigenvalue", addlabels = TRUE, main = "Gràfica dels valors propis de les diferents components", xlab = "Component", ylab = "Eigenvalue")
+```
+
+Aplicant la regla de Elbow ens quedaríem amb les 4 primeres components, igual que en l'anàlisi numèrica.
+
+
+
+
+# Individuals
+
+## Anàlisi gràfica
+
+Mostrem els 10 punts amb més contribució en les 4 primeres dimensions (5 en les dos primeres i 5 en les altres):
+
+El primer i el segon eix:
+
+```{r}
+plot.PCA(res.pca, choix=c("ind"),cex=0.8, col.ind = "tomato", invisible = "quali", select = "contrib 5", axes = c(1,2))
+```
+
+El tercer i el quart eix:
+
+```{r}
+plot.PCA(res.pca, choix=c("ind"),cex=0.8, col.ind = "tomato", invisible = "quali", select = "contrib 5", axes = c(3,4))
+```
+
+## Anàlisi numèrica
+
+Busquem els extrems de forma numèrica:
+
+### Dimensió 1
+
+```{r}
+out <- calcQ(res.pca$ind$coord[,1])
+Boxplot(res.pca$ind$coord[,1])
+abline(h=c(9,out$souti),col="red",lwd=2)
+```
+
+```{r, echo=FALSE}
+ll1 <- (which(res.pca$ind$coord[,1] > 9))
+rang1 <- sort(res.pca$ind$coord[,1], decreasing = TRUE)
+t <- names(rang1[1:5])
+```
+
+```{r}
+df[t,vars_pca]
+```
+
+Fixem el llindar en 9. Els que sobrepassin d'aquest valor els considerarem individuals suplementaris.
+
+```{r, echo=FALSE}
+df$epca1 <- 0
+df[t,"epca1"] <- 1
+df$epca1 <- factor(df$epca1, labels = c("NoOutDim1","YesOutDim1"))
+
+auxv <- c(vars_cont, vars_disc, names(df)[length(df)])
+targ <- length(auxv)
+```
+
+```{r}
+cat <- catdes(df[,auxv],targ)
+cat$category$YesOutDim1
+cat$quanti$YesOutDim1
+```
+
+Podem apreciar que els "outliers" de la primera dimensió vénen donats pel preu del viatge i totes les variables que se'n deriven: taxes, distancia, temps i els peatges.
+
+### Dimensió 2
+
+```{r}
+out <- calcQ(res.pca$ind$coord[,2])
+Boxplot(res.pca$ind$coord[,2])
+abline(h=c(6.7,out$souti),col="red",lwd=2)
+```
+
+```{r,echo=FALSE}
+ll2 <- (which(res.pca$ind$coord[,2] > 6.7))
+rang2 <- sort(res.pca$ind$coord[,2], decreasing = TRUE)
+t <- names(rang2[1:5])
+```
+
+```{r}
+df[t,vars_pca]
+```
+
+Fixem el llindar en 6.7. Els que sobrepassin d'aquest valor els considerarem individuals suplementaris.
+
+```{r, echo=FALSE}
+df$epca2 <- 0
+df[t,"epca2"] <- 1
+df$epca2 <- factor(df$epca2, labels = c("NoOutDim2","YesOutDim2"))
+
+x <- c("Pickup_longitude", "Pickup_latitude", "Dropoff_longitude", "Dropoff_latitude")
+auxv <- c(x, vars_cont, vars_disc, names(df)[length(df)])
+targ <- length(auxv)
+```
+
+```{r}
+cat <- catdes(df[,auxv],targ)
+cat$category$YesOutDim2
+cat$quanti$YesOutDim2
+```
+
+Podem apreciar que els "outliers" d'aquesta segona dimensió vénen donats per la naturalesa del trajecte: coordenades, temps, etc. També afecten altres variables com MTA_TAX, improvement_surcharge, PaymentType i RateCodeID.
+
+### Dimensió 3
+
+```{r}
+out <- calcQ(res.pca$ind$coord[,3])
+Boxplot(res.pca$ind$coord[,3])
+abline(h=c(out$souts,-6),col="red",lwd=2)
+```
+
+```{r, echo=FALSE}
+ll3 <- (which(res.pca$ind$coord[,3] < -6))
+rang3 <- sort(res.pca$ind$coord[,3], decreasing = TRUE)
+t <- names(rang3[1:5])
+```
+
+```{r}
+df[t,vars_pca]
+```
+
+Fixem el llindar en -6. Els que sobrepassin d'aquest valor els considerarem individuals suplementaris.
+
+```{r, echo=FALSE}
+df$epca3 <- 0
+df[t,"epca3"] <- 1
+df$epca3 <- factor(df$epca3, labels = c("NoOutDim3","YesOutDim3"))
+
+x <- c("Pickup_longitude", "Pickup_latitude", "Dropoff_longitude", "Dropoff_latitude")
+auxv <- c(x, vars_cont, vars_disc, names(df)[length(df)])
+targ <- length(auxv)
+```
+
+```{r}
+cat <- catdes(df[,auxv],targ)
+cat$category$YesOutDim3
+cat$quanti$YesOutDim3
+```
+
+En aquesta dimensió, els outliers vénen donats per aquells que paguen peatges (tolls_amount).
+També les distàncies grans i els preus alts influeixen en els outliers.
+
+### Dimensió 4
+
+```{r}
+out <- calcQ(res.pca$ind$coord[,4])
+Boxplot(res.pca$ind$coord[,4])
+abline(h=c(3.5,-4),col="red",lwd=2)
+```
+
+```{r,echo=FALSE}
+ll4 <- (which(res.pca$ind$coord[,4] > 3.5 | res.pca$ind$coord[,4] < -4))
+rang4 <- sort(res.pca$ind$coord[,4], decreasing = TRUE)
+t <- names(rang4[1:5])
+```
+
+```{r}
+df[t,vars_pca]
+```
+
+Fixem el llindar en 3.5 i -4. Els que sobrepassin d'aquest valor els considerarem individuals suplementaris.
+
+```{r, echo=FALSE}
+df$epca4 <- 0
+df[t,"epca4"] <- 1
+df$epca4 <- factor(df$epca4, labels = c("NoOutDim4","YesOutDim4"))
+
+x <- c("Pickup_longitude", "Pickup_latitude", "Dropoff_longitude", "Dropoff_latitude")
+auxv <- c(x, vars_cont, vars_disc, names(df)[length(df)])
+targ <- length(auxv)
+```
+
+```{r}
+cat <- catdes(df[,auxv],targ)
+cat$category$YesOutDim4
+cat$quanti$YesOutDim4
+```
+
+A mesura que anem augmentant la dimensió hi ha menys variables que influeixen en les dades. En aquest cas podem destacar: peatges, propines, preu, pagament amb targeta de credit i l'hora.
+
+### Refem PCA amb els outliers com a individuals suplementaris
+
+```{r}
+llsup <- c(ll1, ll2, ll3, ll4)
+length(llsup)
+```
+
+```{r}
+res.pca <- PCA(df[,vars_pca], ind.sup = llsup, quanti.sup = s_quant, quali.sup = s_quali, ncp = 4)
+```
+
+
+Veure els individus suplementaris resaltats en blau.
+
+```{r}
+plot.PCA(res.pca, choix=c("ind"), cex=0.8, col.ind = "gray", invisible = "quali", select = "contrib 1", axes = c(1,2))
+```
+
+```{r}
+plot.PCA(res.pca, choix=c("ind"), cex=0.8, col.ind = "gray", invisible = "quali", select = "contrib 1", axes = c(3,4))
+```
+
+
+
+
+# Interpretem els eixos
+
+## Anàlisi numèrica
+
+```{r, echo=FALSE}
+summary(res.pca, nb.dec = 2, ncp = 4, nbelements = 16)
+```
+
+```{r}
+dimdesc(res.pca, axes = 1:4)
+```
+
+En la dimensió 1 les variables més explicatives són les distàncies (Trip_distance, Trip_distance_km i man_distance), el preu de la carrera (Fare_amount i Total_amount) i el temps. En menor mesura, també podem veure relacions amb les propines i la velocitat. Totes elles estan relacionades amb l'eix de forma directament proporcional.
+Els nostres resultats són lògics, com més alt sigui el preu, major distància haurem recorregut, major temps hem estat i el preu de la carrera és més alt.
+
+En la dimensió 2 les variables més explicatives són les coordenades. Amb menor explicació també tenim la velocitat i les propines. Les coordenades i la velocitat estan directament relacionades a l'eix 2, en canvi, les propines ho fa de forma inversament proporcional.
+
+En la dimensió 3 les variables més explicatives són les coordenades. Aquí podem veure que les latituds són inversament proporcionals a les longituds.
+En aquest apartat podem trobar una explicació lògica: les latituds són positives (el seu valor ronda els 40) i les longituds són negatives (el seu valor ronda els -74).
+
+En la dimensió 4 les variables més explicatives són velocitat, peatges, MTA_tax, número de passatger, extra i temps.
+El temps, peatges, MTA_tax i nombre de passatgers estan directament relacionades amb l'eix. L'extra i el temps estan relacionats inversament.
+
+El nostre target, Total_amount (passat com a variable suplementaria), té una major representació en l'eix 1.
+
+## Anàlisi gràfica
+
+```{r}
+fviz_pca_var(res.pca, axes = 1:2, col.var="cos2", repel = TRUE) + scale_color_gradient2(low="red", mid="blue", high="green", midpoint=0.5) + theme_bw()
+```
+
+```{r}
+fviz_pca_var(res.pca, axes = 3:4, col.var="cos2", repel = TRUE) + scale_color_gradient2(low="red", mid="blue", high="green", midpoint=0.5) + theme_bw()
+```
+
+Podem veure en els gràfics les conclusions a les quals s'ha arribat en l'anàlisi numèrica.
+
+
+
+
+# Clustering
+
+## Classificació jeràrquica (Hierarchical Clustering)
+
+Apliquem classificació jeràrquica:
+
+```{r}
+nclust <- 8
+res.hcpc<-HCPC(res.pca, nb.clust = nclust, order=TRUE)
+table(res.hcpc$data.clust$clust)
+```
+
+```{r}
+plot.HCPC(res.hcpc, axes=c(1,2), choice = "map", draw.tree = FALSE, ind.names = FALSE)
+```
+
+```{r}
+fviz_cluster(res.hcpc, axes = c(1,2), stand = FALSE, geom = c("point"), repel = TRUE, ellipse = FALSE, shape = 20, pointsize = 2) + scale_color_manual(values = c("Yellow", "Green", "Black", "Blue", "Red", "violet", "gray", "turquoise4"))
+```
+
+### Descripció dels clústers
+
+Descripció de les variables:
+
+```{r}
+res.hcpc$desc.var #Descripcio de variables
+```
+
+Clúster 1:
+Podem observar que el perfil d'aquest clúster correspon als individus que fan carreres curtes (distàncies i temps, petits) i preus baixos (total amount i fare amount, petits), en latituds grans i el percentatge de gent que acostuma a donar propina és menor a la mitjana.
+
+Clúster 2:
+Podem observar que aquest clúster està definit per carreres curtes i preus baixos, però a diferència del clúster 1, són les longituds les que són grans i el percentatge de gent que acostuma a donar propina és inferior a la mitja i fins i tot més petit respecte al del clúster 1.
+
+Clúster 3:
+Podem observar que els preus són petits i per trajectes curts. A diferència dels dos primers clústers la latitud i la longitud són petites. El percentatge de gent que acostuma a deixar propina és major.
+
+Clúster 4:
+Podem observar que en aquest clúster el preu i la distància han augmentat respecte als anteriors, però són trajectes intermedis. Podem notar que les variables Extra i tolls amount són més petites que la mitjana, que és una característica que trobem en els viatges llargs. La zona en què s'efectuen aquests trajectes és de latituds i longituds més grans. El nombre de gent que dóna o no propina està molt renyit.
+
+Clúster 5:
+Pel que fa al preu i la distancia aquest perfil és molt similar el del clúster 4. Les longituds i les latituds són petites. Hi ha més gent que dóna propina.
+
+Clúster 6:
+Aquest clúster està definit per individus que fan trajectes més llargs i preus més alts, però el temps de trajecte és inferior i per tant les velocitats són més altes. El percentatge de gent que no dòna propina és superior a la mitjana.
+
+Clúster 7:
+Aquest clúster està caracteritzat per trajectes llargs i preus més elevats, el temps és superior al clúster 6, i per tant la velocitat és inferior. El percentatge de gent que dóna propina és superior.
+
+Clúster 8:
+Aquest clúster la majoria d'individus dóna propina. Distàncies i preus molt grans, hi ha més participació de peatges i la velocitat és més elevada.
+
+Descripció dels individuals:
+
+```{r}
+res.hcpc$desc.ind # Parangons (observacions que estan més a prop del centre de gravetat els clústers)
+                  # Individus específics
+```
+
+Posem el número de clúster a les dades:
+
+```{r}
+df$claHP<-nclust+1
+df[row.names(res.hcpc$data.clust),"claHP"]<-res.hcpc$data.clust$clust
+summary(res.hcpc$data.clust$clust)
+table(df$claHP)
+```
+
+
+## Classificació k-Means
+
+Apliquem k-means:
+
+```{r}
+set.seed(1234) #Fixem una llavor per a que sempre sigui el mateix resultat
+data.clu <- res.pca$ind$coord[,1:6]  # Ens quedem amb les 6 dimension amb més representació
+km <- dist(data.clu) # Matriu de distancies
+res.kmeans <- kmeans(data.clu, centers = nclust, iter.max = 30, trace =T)
+
+```
+
+Afegim els clústers a les nostres dades:
+
+```{r}
+df$claKM<-nclust+1
+df[names(res.kmeans$cluster),"claKM"]<-res.kmeans$cluster
+res.kmeans$betweenss/res.kmeans$totss
+
+```
+
+Ens defineix la relació entre la distància entre clústers amb la distància dintre del clúster.
+Estan bastant relacionats (quan és més proper a 1, el clustering serà més fiable).
+
+### Descripció dels clústers
+
+```{r}
+df$f.claKM <- factor(df$claKM, labels = c("kkM-1","kkM-2","kkM-3","kkM-4","kkM-5","kkM-6","kkM-7","kkM-8","kkM-9"))
+
+vars <- c(vars_cont,vars_disc,"f.claKM")
+targ <-  which(vars == "f.claKM")
+catdes(df[,vars],targ)
+```
+
+Clúster 1:
+Aquest clúster està caracteritzat per trajectes llargs i preus més elevats, el temps és superior a la mitjana i, per tant, trobarem velocitats superiors en altres clústers. El percentatge de gent que dòna propina és superior a la mitjana.
+
+Clúster 2:
+Podem observar que aquest clúster està definit per carreres curtes i preus baixos. Ens trobem una àmplia majoria (un 80%) que no dóna propina.
+
+Clúster 3:
+Podem observar que en aquest clúster el preu i la distància ens diuen són trajectes intermedis (més alts de la mitjana, però en trobem de més alts en altres clústers). Podem notar que les variables Extra i tolls amount són més petites que la mitjana, que és una característica que trobem en els viatges llargs. El nombre de gent que dòna o no propina està molt renyit.
+
+Clúster 4:
+Aquest clúster la majoria d'individus dóna propina. Distàncies i preus molt grans, hi ha més participació de peatges i la velocitat és més elevada.
+
+Clúster 5:
+Podem observar que el perfil d'aquest clúster correspon als individus que fan carreres curtes (distàncies i temps, petits) i preus baixos (total amount i fare amount, petits). El percentatge de gent que acostuma a donar propina és menor a la mitjana.
+
+Clúster 6:
+Aquest clúster està definit per individus que fan trajectes llargs i preus alts, però el temps de trajecte és inferior i per tant les velocitats són més altes. El percentatge de gent que no dóna propina és superior a la mitjana.
+
+Clúster 7:
+Podem observar que els preus són petits i per trajectes curts. El percentatge de gent que acostuma a deixar propina (45%) és major a la mitjana (41%).
+
+Clúster 8:
+Pel que fa al preu i la distancia aquest perfil és molt similar el del clúster 3, viatges de distància i preus intermedis. Hi ha més gent que dóna propina (al voltant del 60%).
+
+## Hierarchical Clustering vs k-Means
+
+```{r}
+table(df$claHP,df$claKM)
+```
+
+```{r}
+df$claKM<-factor(df$claKM,levels=c(2,1,8,3,5,7,4,6,9),labels=c("kKM-2","kKM-1","kKM-8","kKM-3","kKM-5","kKM-7","kKM-4","kKM-6", "9"))
+df$claHP<-factor(df$claHP,labels=paste("kHP-",1:9))
+tt<-table(df$claHP,df$claKM)
+tt
+
+sum(diag(tt)/sum(tt))
+```
+
+El 99% de les dades pertanyen al mateix clúster, tant en classificació jeràrquica com en k-means.
+
+Guardem les dades de l'entrega 2:
+
+```{r}
+save.image("Taxi_def02.RData")
+```
+
+
+# title: 'ENTREGA 3: CA, MCA and Clustering (MCA)'
+
+Carreguem les dades de l'entrega 2:
+
+```{r, echo=FALSE}
+load("Taxi_def02.RData")
+```
+
+
+# Preparem CA
+
+```{r, echo=FALSE}
+names(df)
+t1 <- c("f.Total_amount","f.pickup_hora")
+t2 <- c("f.Total_amount", "f.Time")
+```
+
+
+# CA
+
+## f.Total_amount vs f.pickup_hora
+
+```{r}
+tt1 <- table(df[,t1])
+tt1
+
+prop.table(tt1,1) # Perfil fila
+prop.table(table(df[,t1[2]])) # Perfil marginal de la fila
+
+prop.table(tt1,2) # Perfil columna
+prop.table(table(df[,t1[1]])) # Perfil marginal de la columna
+```
+
+A simple vista sembla que les variables podrien ser independents, tot i que difereixen una mica. Apliquem el test chi-quadrat per poder analitzar-ho de forma estadística.
+
+```{r}
+chisq.test(tt1)
+```
+
+El p-valor és 0.0006, per tant, rebutgem la hipòtesi d'independència i diem que el preu total de la carrera depèn del període del dia.
+
+```{r}
+res.ca1 <- CA(tt1)
+lines(res.ca1$row$coord[,1],res.ca1$row$coord[,2], lwd = 2, col = "blue")
+```
+
+Tot i que no es veu gaire bé, podem dir que els viatges de preus intermitjos es fan a la tarda-nit, mentre que viatges extrems (molt cars o molt barats) es fan per la matinada-matí.  No veiem clars indicis per poder ajuntar el pickuphora[12-18) i el pickuphora[18-00), ja que la distància entre els dos punts és significativa.
+
+
+
+### Eixos (eigenvalues)
+
+```{r}
+t(round(res.ca1$eig,5)) # Transposem per una millor lectura
+```
+
+Amb una dimensió ja expliquem el 83% de les dades. Ens quedarem amb el primer parell de dimensions que expliquen el 99,5% de les dades.
+
+```{r}
+# res.ca1$row$contrib[,1:2]
+res.ca1$row$cos2[,1:2]
+```
+
+Els valors de la variable total_amount mitjans-grans queden explicats majoritàriament per la dimensió 1 (del 88% al 94%), en canvi, els total_amount baixos queden repartits entre els dos eixos.
+
+
+
+
+## f.Total_amount vs. f.time
+
+```{r}
+tt2 <- table(df[,t2])
+tt2
+
+prop.table(tt2,1) # Perfil fila
+prop.table(table(df[,t2[2]])) # Perfil marginal de la fila
+
+prop.table(tt2,2) # Perfil columna
+prop.table(table(df[,t2[1]])) # Perfil marginal de la columna
+```
+
+En aquest cas, a simple vista, podem detectar clarament que les variables no seran independents. Farem el test chi-quadrat per comprovar-ho.
+
+```{r}
+chisq.test(tt2)
+```
+
+El p-valor és 0, per tant, rebutgem la hipòtesi d'independència i diem que el preu total de la carrera depèn del temps de trajecte.
+
+```{r}
+res.ca2 <- CA(tt2)
+lines(res.ca2$row$coord[,1],res.ca2$row$coord[,2], lwd = 2, col = "blue")
+```
+
+Clarament, com ja sabíem, els viatges de curta durada són més barats que els de llarga durada. Això es veu clarament en el gràfic.
+
+
+
+
+### Eixos (eigenvalues)
+
+```{r}
+t(round(res.ca2$eig,5)) # Transposem per una millor lectura
+```
+
+Amb les dues primeres dimensions ja expliquem el 88% de les dades. Ens quedarem amb el primer parell de dimensions.
+
+```{r}
+# res.ca2$row$contrib[,1:2]
+res.ca2$row$cos2[,1:2]
+```
+
+Els valors extrems del total_amount tenen més explicabilitat en l'eix de la dimensió 1. En canvi, els valors intermedis es reparteixen entre els dos eixos.
+
+```{r}
+res.ca2$eig
+res.ca2$call$marge.col # Perfils marginals
+```
+
+
+
+
+# MCA using multivariant
+
+Estudiem diversos factors simultàniament. El target amb tota una pila de variables factors.
+Utilitzem el mètode MCA, i li podem passar individus suplementaris, qualitatives i no qualitatives suplementaries, ...
+
+Fem una llista de variables: tots els factors natius i els creats per discretització.
+Quantitativa suplementaria total_amount, i les qualitatives suplementaria Any tip i el f.Total_Amount.
+Executem MCA:
+
+```{r}
+sel<-names(df[,c(1,4,17:20,24,26,29:40)]);sel
+#quali.sup = AnyTip i f.Total_amount
+#quanti.sup = Total_amount, time, Trip_distance_km
+res.mca<-MCA(df[,sel],quali.sup = c(7,19),quanti.sup = c(3,6,8))
+# x<- llsup[1:61]
+#res.mca<-MCA(df[,sel],quali.sup = c(7,19),quanti.sup = c(3,6,8), ind.sup = x)
+```
+
+Si passem els outliers multivariant com a suplementaris ens dóna un error, hem optat per no posar-los.
+
+Els gràfics que ens surten per defecte:
+
+-MCA map factor, podem observar en vermell tots els nivells dels factors que són actius i en un altre color tenim les variables que són factors: qualitatives suplementaries AnyTip i f.total_amount. Nivell de factors
+Podem trobar totes les categories.
+
+-Segon gràfic el d'individus, podem observar tots els punts. 
+
+-Tercer gràfic, intentar donar-nos una mitjana per factor dintre del qual són les variables actives representa amb els eixos factorials la interpretació de les variables(les coordenades són "la correlació amb l'eix"). La distància està molt correlacionada amb el primer eix i en el segon eix. És una associació dels factors. Crear un indicador sintètic que calculi la correlació entre factors.
+
+
+
+
+## Eixos (eigenvalues)
+
+```{r}
+t(round(res.mca$eig,3)) # Transposem per una millor lectura
+mean(res.mca$eig[,1])
+```
+
+A partir de la dimensió 13, que és on els eixos són superiors a la mitjana, obtenim una explicabilitat del 80%.
+De cara a fer classificació jeràrquica (Clustering) considerarem treballar amb 14 variables.
+
+
+
+## Individual anàlisis
+
+```{r,echo=FALSE}
+summary(res.mca,nbelements=48)
+```
+
+Per poder interpretar un nombre elevat de dimensions, ho fem a través del "factor map", gran valor afegit, la descripció de les categories.
+
+```{r}
+plot.MCA(res.mca,choix=c("ind"),cex=0.8)
+plot.MCA(res.mca,choix=c("ind"),invisible=c("ind"))
+t <- sort(res.mca$var$coord[,1], decreasing = TRUE)
+t[1:4]
+```
+
+Els individus que tenen més categories diferents entre si estan més allunyats i per tant, el perfil serà més diferent. Les categories més allunyades són: TripType.Dispatch, improvement.0, MTAtax.0 i RateCodeId.Others.
+En canvi, els individus que estan més a prop del centre de la gravetat tenen un perfil més semblant i les categories més comunes a la majoria d'individus.
+-Són les categories de representació semblant a la mitjana.
+
+
+
+
+### Representació de categories
+
+Ens interessa unir els valors de les categories de les variables suplementàries, és a dir, el target.
+
+```{r}
+plot.MCA(res.mca,choix=c("ind"),invisible=c("ind"),axes=c(1,2))
+lines(res.mca$quali.sup$coord[3:6,1],res.mca$quali.sup$coord[3:6,2],lwd=2,col="darkgreen") # Trencada dels nivells de f.Total_Amount
+lines(res.mca$quali.sup$coord[1:2,1],res.mca$quali.sup$coord[1:2,2],lwd=2,col="darkblue") # Trencada AnyTip
+```
+
+res.mca$quali.sup, ens interessa les coordenades per unir per una línia.
+
+Si volem agafar els valors en color verd, de la coordenada fila, de 3 fins a 6 no agafem Anytip.->Trencada dels nivells de f.total_amount.
+Si ens interessa trencada de Anytip. Com està molt a prop del centre de gravetat és molt difícil discriminar quins donen i quins no donen propina.->Trencada AnyTip
+-Centre de gravetat correspon al perfil mitjà.
+
+
+
+
+
+# Clustering
+
+## Classificació jeràrquica (Hierarchical Clustering)
+
+Apliquem classificació jeràrquica:
+
+```{r}
+nclust <- 8
+res.hc<-HCPC(res.mca, nb.clust = nclust, order=TRUE)
+table(res.hc$data.clust$clust)
+```
+
+```{r}
+fviz_cluster(res.hc, axes = c(1,2), stand = FALSE, geom = c("point"), repel = TRUE, ellipse = FALSE, shape = 20, pointsize = 2) + scale_color_manual(values = c("Yellow", "Green", "Black", "Blue", "Red", "violet", "gray", "turquoise4"))
+```
+
+
+
+
+### Descripció dels clústers
+
+Descripció de les variables:
+
+```{r}
+res.hc$desc.var # Descripció de variables
+```
+
+Clúster 1
+
+Preus, distancies i temps petits. En aquest grup una majoria de gent paga improvement_surcharge, extra i taxa MTA, però en canvi, no paga peatges.
+Tota la gent demana el taxi al carrer i un 65% de la gent no paga propina (això en part és degut al mètode de pagament).
+Un 59% de les persones paga en efectiu i un 39% amb targeta de crèdit.
+Acostumen a utilitzar el taxi entre les 18 h - 00 h (72%) i les 00 h - 06 h (27%).
+
+Clúster 2
+
+Preus, distancies i temps petits. En aquest grup una majoria de gent paga improvement_surcharge i taxa MTA, però en canvi, no paga peatges ni extres.
+Tota la gent demana el taxi al carrer i un 68% de la gent no paga propina (això en part és degut al mètode de pagament).
+Un 60% de les persones paga en efectiu i un 37% amb targeta de crèdit.
+Acostumen a utilitzar el taxi entre les 12 h - 18 h (62%) i les 06 h - 12 h (37%).
+
+Cúster 3
+
+Preus, distancies i temps petits, però més grans que els clústers 1 i 2. En aquest grup una majoria de gent paga extra, improvement_surcharge i taxa MTA, però en canvi, no paga peatges.
+Tota la gent demana el taxi al carrer.
+Acostumen a utilitzar el taxi entre les 18 h- 00 h (74%) i les 00 h - 06 h (25%).
+
+Clúster 4
+
+Preus, distancies i temps mitjans tot i que encara són relativament petits. En aquest grup una majoria de gent paga improvement_surcharge i taxa MTA, però en canvi, no paga peatges ni extra.
+Tota la gent demana el taxi al carrer i un 64% de la gent no paga propina (això en part és degut al mètode de pagament).
+Un 56% de les persones paga en efectiu i un 43% amb targeta de crèdit.
+Acostumen a utilitzar el taxi entre les 12 h - 18 h (62%) i les 06 h - 12 h (37%).
+
+Clúster 5
+
+Preus, distancies i temps mitjans. En aquest grup una majoria de gent paga improvement_surcharge, extra i taxa MTA, però en canvi, no paga peatges.
+Tota la gent demana el taxi al carrer i un 47% paga propina (està bastant renyit)
+Un 44% de les persones paga en efectiu i un 55% amb targeta de crèdit.
+Acostumen a utilitzar el taxi entre les 18 h - 00 h (68%) i les 00 h - 06 h (32%).
+
+Clúster 6
+
+Preus, distancies i temps mitjans-alts. En aquest grup una majoria de gent paga improvement_surcharge i taxa MTA, però en canvi, no paga peatges ni extres.
+Tota la gent demana el taxi al carrer.
+Un 53% de les persones paga amb targeta de crèdit.
+Acostumen a utilitzar el taxi entre les 12 h - 18 h (61%) i les 06 h - 12 h (38%).
+
+Clúster 7
+
+Preus, distancies i temps alts. En aquest grup una majoria de gent paga improvement_surcharge i taxa MTA. Trobem que un 6% paga peatges.
+Tota la gent demana el taxi al carrer i un 53% paga propina.
+Un 61% de les persones paga amb targeta de crèdit (aquest percentatge afavoreix el pagament de propines).
+Els viatges es realitzen de forma més o menys uniforme durant tot el període.
+
+Clúster 8
+
+Preus, distancies i temps alts. Aquí, a diferència dels altres clústers, no es paga la taxa "improvement_surcharge". Tampoc es paga taxa MTA ni extra. EL 90% de la gent no dóna propina.
+Un 90% de la gent demana el taxi per encàrrec.
+Un 72% de les persones paga en efectiu i un 25% amb targeta de crèdit.
+
+Aportacions generals:
+
+Generalment, en el últim clúster trobem que el tipus de viatge és dispatch i ratecode és others, en canvi, en els altres trobem street hail i standard rate respectivament.
+
+
+
+Descripció dels individuals:
+
+```{r}
+res.hc$desc.ind # Parangons (observacions que estan més a prop del centre de gravetat els clústers)
+                # Individus específics
+```
+
+Posem el número de clúster a les dades:
+
+```{r}
+df$claMCA<-nclust+1
+df[row.names(res.hc$data.clust),"claMCA"]<-res.hc$data.clust$clust
+summary(res.hc$data.clust$clust)
+table(df$claMCA)
+table(df$claHP,df$claMCA)
+```
+
+Sembla que hi ha una certa correspondència entre els clústers 1,2 i 3 de PCA amb els clústers 1 - 5 de MCA. Tambe tenim correspondència entre els 4 - 8 de PCA amb 5 - 8 de MCA.
+
+El clustering en PCA i en MCA no són iguals però observem certa relació degut al fet que les dades numèriques estan convertides en factors, per tant, han conservar certa similitud.
+
+
+
+# title: 'ENTREGA 4: Predicció del modelatge del target numèric'
+
+Carreguem les dades de l'entrega 2:
+
+```{r, echo=FALSE}
+load("Taxi_def02.RData")
+```
+
+
+# Target numèric: Total_amount
+
+Primer eliminem les dades multivariants més allunyades vistes en l'entrega 2:
+
+```{r}
+dff <- df[-llsup,]
+```
+
+Mirem si el target segueix una distribució normal:
+
+```{r}
+mm<-mean(dff$Total_amount);mm
+ss<-sd(dff$Total_amount);ss
+
+hist(dff$Total_amount, freq=FALSE ,25)
+curve(dnorm(x,mm,ss),add=TRUE, col = "cyan", lwd=2)
+```
+
+Tot i que, ja podem observar en la gràfica que les nostres dades no segueixen una distribució normal. Ho corroborem fent el test Shapiro, on la H~0~: Total_amount segueix una distribució normal.
+
+```{r}
+shapiro.test(dff$Total_amount)
+```
+
+Efectivament, com ja havíem observat en el gràfic no es tracta d'una distribució normal. Hem rebutjat la hipòtesi nul·la, ja que tenim un p-valor < 0.05.
+
+Quan calculem la correlació utilitzarem el mètode de Spearman.
+
+
+
+
+# Variables numèriques relacionades amb Total_amount
+
+Veiem quines variables estan més relacionades amb Total_amount (Per tant, són candidates a formar part del model):
+
+```{r, echo=FALSE}
+summary(dff)
+names(dff)
+```
+
+```{r}
+condes(dff[,vars_cont],which(vars_cont == "Total_amount"))
+```
+
+
+La variable Fare_amount ens permetria explicar la majoria del model. Això és degut al fet que el preu total del viatge depèn del Fare_amount, uns certs extres i la propina. 
+Per poder trobar un model més detallat respecte a altres variables eliminarem aquesta variable del nostre model:
+
+```{r}
+vars_cont1<- vars_cont[-3]
+vars_cont1
+```
+
+
+```{r}
+condes(dff[,vars_cont1],which(vars_cont1 == "Total_amount"))
+```
+
+Les variables més relacionades són les distàncies, el temps i les propines. Són les que el seu p-value = 0.
+
+```{r}
+cc <- cor(dff[,vars_cont1],method= "spearman")
+round(cc[,8],dig=4)
+```
+
+Ens fixem en la columna Total_amount, les variables que estan correlacionades amb el meu target. Algunes de les variables estan relacionades entre elles i això ens pot donar problemes. Per tant, haurem de fer una tria (p. ex. només utilitzar una distància, Trip_distance_km) i estalviar-nos variables que estan molt correlacionades entre elles.
+
+
+
+
+# Variables numeriques relacionades amb Total_amount
+
+Trip_distance_km conté NAs, és molt probable que s'assembli molt a Trip_distance o man_distance. Eliminarem Trip_distance per a poder tenir Trip_distance_km.
+
+## m1 
+
+```{r}
+m1<-lm(Total_amount~.,data = dff[,vars_cont1])
+summary(m1)
+vars_cont2 <- vars_cont1[-2]
+```
+
+Per començar utilitzarem el model més complex possible i a partir d'aquí l'anirem simplificant:
+
+```{r}
+m2<-lm(Total_amount~.,data =dff[,vars_cont2])
+summary(m2)
+vif(m2) #vif: variance inflation factor
+```
+
+Treiem les variables que no ens interessen step by step:
+
+```{r}
+m3<-step(m2,k=log(nrow(dff)))
+summary(m3)
+vif(m3)
+```
+
+Hem eliminat man_distance, improvement_surcharge i Passenger_count.
+
+El coeficient R^2^ és molt similar, per tant, podem quedar-nos amb el segon, ja que és menys complex.
+
+Els vifs són molt alts.
+
+## m2 vs m3
+
+Apliquem el test de Fisher per analitzar i comparar els dos models (m2 i m3):
+
+```{r}
+anova(m3,m2)
+```
+
+La hipòtesi del test de Fisher, H~0~: m2 = m3. En aquest cas, acceptem la hipòtesi nul·la, els dos models són equivalents.
+
+```{r}
+BIC(m2, m3)
+```
+
+El BIC ens diu que m3 és més adequat.
+
+```{r}
+marginalModelPlots(m3)
+```
+
+Podem veure que MTA_tax ens pot donar problemes, així que l'eliminarem:
+
+```{r}
+m4<-lm(Total_amount~Extra+Tip_amount+Tolls_amount+Trip_distance_km+time+speed, data = dff)
+summary(m4)
+vif(m4)
+```
+
+Trip_distance_km i time tenen un vif superior a 3. Les variables estan correlacionades, n'haurem d'eliminar una. Tenim la sospita que ens anirà millor si eliminem la distància (que té el vif més gran).
+
+```{r}
+m5<-lm(Total_amount~Extra+Tip_amount+Tolls_amount+time+speed,data = dff)
+summary(m5)
+vif(m5)
+```
+
+El coeficient R^2^ es manté per sobre del 0.9. Ara les nostres variables tenen un vif per sota d'1,2.
+
+## m4 vs m5
+
+Apliquem el test de Fisher per analitzar i comparar els dos models (m4 i m5):
+
+```{r}
+anova(m5,m4)
+```
+
+La hipòtesi del test de Fisher, H~0~: m5 = m4. En aquest cas no es tracta de dos models equivalents.
+
+Apliquem el Test d'efectes nets pels dos models:
+
+```{r}
+Anova(m4)
+Anova(m5)
+```
+
+El test d'efectes nets ens indica que totes les variables són "necessàries".
+
+```{r}
+BIC(m4, m5)
+```
+
+El BIC ens diu que m4 és més adequat.
+
+Malgrat tot indica que hauríem d'escollir el model anterior, preferirem quedar-nos amb el nou perquè no té col·linealitat.
+
+### Anàlisis de residus m5
+
+```{r}
+par(mfrow=c(2,2))
+plot(m5)
+par(mfrow=c(1,1))
+```
+
+Si la "línia" del Scale-Location no és plana, haurem de fer alguna correcció al model.
+
+### Diagnòstics
+
+Quan la variància no és constant, es diu heteroscedasticitat.
+
+```{r}
+bptest(m5)
+```
+
+Podem veure que hi ha heterocedasticitat. Podem aplicar alguna transformació per intentar solucionar aquest problema.
+
+```{r}
+m6<-lm(log(Total_amount)~Extra+MTA_tax+Tip_amount+Tolls_amount+time+speed,data = dff)
+summary(m6)
+bptest(m6)
+```
+
+Aplicant el logaritme a la variable explicativa no solucionem el problema. Podem intentar aplicar polinomis en algunes variables:
+
+
+```{r}
+m7<-lm(Total_amount~Extra+I(Extra^2)+MTA_tax+Tip_amount+Tolls_amount+time+I(time^2)+speed, data = dff)
+bptest(m7)
+
+m8<-lm(Total_amount~Extra+I(Extra^2)+MTA_tax+Tip_amount+I(Tip_amount^2)+Tolls_amount+time+I(time^2)+speed+I(speed^2), data = dff)
+bptest(m8)
+```
+
+No funciona, hauríem de provar altres combinacions.
+
+Eliminem time:
+
+```{r}
+m9<-lm(Total_amount~Extra+Tip_amount+Tolls_amount+Trip_distance_km+speed,data = dff)
+summary(m9)
+vif(m9)
+```
+
+El coeficient  R^2^ és 0,9546. Ara les nostres variables tenen un vif per sota d'1,6. Ens quedem amb m9 que no té col·linealitat.
+
+### Anàlisis de residus m9
+
+```{r}
+par(mfrow=c(2,2))
+plot(m9)
+par(mfrow=c(1,1))
+```
+
+```{r}
+bptest(m9)
+```
+
+Podem observar que no tenim heterocedasticitat, ja que podem acceptar la H~0~: m9 té homocedasticitat.
+
+
+## m10
+
+Mirem si hi ha alguna transformació polinòmica que ens millori el model:
+
+```{r}
+m10<-lm(Total_amount~Extra+I(Extra^2)+Tip_amount+Tolls_amount+Trip_distance_km+speed, data = dff)
+summary(m10)
+bptest(m10)
+```
+
+Aquest model ens explica un 95,47% de les nostres dades. Millorem l'homocedasticitat, tenim un pvalue = 0.1879.
+
+```{r}
+BIC(m10,m9)
+```
+
+Ens quedem amb el model m10, ja que té un BIC més petit i com hem pogut indicar anteriorment, millora tant amb el coeficient R^2^ i l'homocedasticitat
+
+```{r}
+par(mfrow=c(2,2))
+plot(m10)
+par(mfrow=c(1,1))
+```
+
+```{r}
+m10marginal<-lm(Total_amount~poly(Extra,2)+Tip_amount+Tolls_amount+Trip_distance_km+speed, data = dff)
+marginalModelPlots(m10marginal)
+```
+
+No s'observa cap problema entre les dades i el model, les línies blaves i vermelles no estan separades.
+
+```{r}
+residualPlots(m10)
+```
+
+```{r}
+plot(allEffects(m10))
+```
+
+Les úniques variables que veiem un pèl de variància en color blau clar respecte la línia blava són Extra i Tolls_amount. Són variables que possiblement milloren el model si les tractem com a factors.
+
+
+
+
+# Variables explicatives per a la construcció de models
+
+## Les numèriques del model poden ser factors?
+
+### Variable Extra
+
+```{r}
+m11<-lm(Total_amount~f.Extra+Tip_amount+Tolls_amount+Trip_distance_km+speed, data = dff)
+summary(m11)
+```
+
+El coeficient  R^2^ és 0,9547 com el model m10.
+
+```{r}
+Anova(m11)
+BIC(m11,m10)
+```
+
+Deixem Extra com a variable numèrica ja que veiem que els dos models son iguals.
+
+### Variable Tolls_amount
+
+```{r}
+m12<-lm(Total_amount~Extra+I(Extra^2)+Tip_amount+f.Tolls_amount+Trip_distance_km+speed, data = dff)
+summary(m12)
+```
+
+El coeficient  R^2^ és el mateix que el model m10.
+
+```{r}
+Anova(m12)
+BIC(m12,m10)
+```
+
+Deixem Tolls_amount com a variable numèrica.
+
+### Variable Tip_amount
+
+```{r}
+m13<-lm(Total_amount~Extra+I(Extra^2)+AnyTip+Tolls_amount+Trip_distance_km+speed, data = dff)
+summary(m13)
+```
+
+El coeficient  R^2^=0,9347. És inferior al del model m12.
+
+```{r}
+Anova(m13)
+BIC(m13,m12)
+```
+
+Deixem Tip_amount com a variable numèrica.
+
+### Variable Trip_distance_km
+
+```{r}
+m14<-lm(Total_amount~Extra+I(Extra^2)+Tip_amount+Tolls_amount+f.Trip_distance_km+speed, data = dff)
+summary(m14)
+```
+
+El coeficient  R^2^=0,7905. És inferior al del model m12.
+
+```{r}
+Anova(m14)
+BIC(m14,m12)
+```
+
+Deixem Trip_distance_km com a variable numèrica.
+
+### Variable Speed
+
+Factoritzem la variable speed:
+
+```{r}
+pp<-quantile(dff$speed); pp
+dff$f.speed<-factor(cut(dff$speed,pp,include.lowest = TRUE))
+table(dff$f.speed)
+barplot(table(dff$f.speed))
+```
+
+```{r}
+m15<-lm(Total_amount~Extra+I(Extra^2)+Tip_amount+Tolls_amount+Trip_distance_km+f.speed, data = dff)
+summary(m15)
+```
+
+El coeficient  R^2^=0,948. És inferior al del model m12.
+
+```{r}
+Anova(m15)
+BIC(m15,m12)
+```
+
+Deixem speed com a variable numèrica.
+
+### Interaccions d'Extra
+
+```{r}
+m16<-lm(Total_amount~(Tip_amount+Tolls_amount+Trip_distance_km+speed)*(f.Extra), data = dff)
+summary(m16)
+Anova(m16)
+BIC(m16,m12)
+```
+
+Veient el test d'efectes nets podem detectar que hi ha interaccions que no són necessàries, aplicarem un step:
+
+```{r}
+m17<-step(m16, k=log(nrow(dff)))
+summary(m17)
+```
+
+El coeficient de determinació és del 95,62%.
+
+No podem interpretar a partir del summary si les variables factor són significatives. S'ha de fer amb el test d'efectes nets:
+
+```{r}
+Anova(m17)
+```
+
+Podem observar que totes les variables són significatives en aquest model.
+
+El model resultant és:
+
+```{r}
+m17<-lm(Total_amount~(Tip_amount+Tolls_amount)  +  (Trip_distance_km+speed)*(f.Extra), data = dff)
+```
+
+Interpretació:
+Total_amount = 7.283 +  1.045 * Tip_amount + 5.309 * Tolls_Amount + 2.099 * Trip_distance_km - 0.183 * speed - 0.219 * f.ExtraExtra.0.5 + 1.513 * f.ExtraExtra.1 - 0.163 * Trip_distance_km:f.ExtraExtra.0.5 + 0.079 * Trip_distance_km:f.ExtraExtra.1 + 0.051 * speed:f.ExtraExtra.0.5 - 0.049 * speed:f.ExtraExtra.1 
+
+```{r}
+BIC(m17,m12)
+```
+
+El nou model amb interaccions és millor que el millor model que havíem creat fins ara, m12.
+
+### Payment_type
+
+```{r}
+m18<-lm(Total_amount~Extra+I(Extra^2)+Tip_amount+Tolls_amount+Trip_distance_km+speed+Payment_type, data = dff)
+summary(m18)
+```
+
+El coeficient de determinació és del 95,49%.
+
+```{r}
+Anova(m18)
+BIC(m18,m12)
+```
+
+Sembla que posar el factor Payment_type millora una mica el nostre model sense intereccions, m12.
+
+Intentarem posar-lo amb interaccions:
+
+```{r}
+m19<-lm(Total_amount~(Extra+I(Extra^2)+Tip_amount+Tolls_amount+Trip_distance_km+speed)*Payment_type, data = dff)
+```
+
+```{r}
+Anova(m19)
+BIC(m19,m18)
+```
+
+Sembla ser que amb interaccions millora també, intentare elimnar les interaccions inservibles (les que tenen un pvalue > 0.05):
+
+```{r}
+m20<-step(m19, k=log(nrow(dff)))
+summary(m20)
+Anova(m20)
+BIC(m20,m18)
+```
+
+Finalment, el model queda de la següent manera:
+
+```{r}
+m20<-lm(Total_amount~Extra+I(Extra^2)+Tip_amount+Tolls_amount+Trip_distance_km +  (speed)*(Payment_type), data = dff)
+summary(m20)
+```
+
+
+Interpretació:
+Total_amount = 7.679 + 0.233 *(Extra^2) + 1.057 * Tip_amount + 5.479 * Tolls_Amount + 2.051 * Trip_distance_km - 0.191 * speed - 0.914 *Payment_typePaymentType.Cash + 0.165 * Payment_typePaymentType.Others + 0.043 * speed:Payment_typePaymentType.Cash - 0.116 * speed:Payment_typePaymentType.Others
+
+### Combinació m20 i m17
+
+Intentarem combinar aquests dos models, per intentar aconseguir un model millor:
+
+```{r}
+summary(m17)
+summary(m20)
+```
+
+```{r}
+m21<-lm(Total_amount~(Tip_amount+Tolls_amount)  +  (Trip_distance_km+speed)*(f.Extra+Payment_type), data = dff)
+m22<-step(m21, k=log(nrow(dff)))
+```
+
+Finalment, podem deixar el model com a:
+
+```{r}
+summary(m22)
+bptest(m22)
+BIC(m22,m12)
+BIC(m22,m17)
+BIC(m22,m20)
+```
+
+El nostre millor model és m22. 
+
+
+# Validació del model
+
+```{r}
+par(mfrow=c(2,2))
+plot(m22)
+par(mfrow=c(1,1))
+```
+
+Analisis dels residus
+```{r}
+#Residual analisys
+Boxplot(rstudent(m22), id.n=4) #indica els 2 outliers mes grans i mes petits.
+abline(h=c(10,-10),col="red",lwd=2)
+llout<-which(rstudent(m22) >= 10 | rstudent(m22) <= -10);length(llout)
+
+#Donar alguna explicació de perque tenen un desajust tant elevat. 
+dff[llout,] #Imprescindible al report
+```
+Es veu un Total_amount molt gran, possiblement el model falla en predir quan son valors valors molt grans, degut a la falta de valors.
+
+Dades influents
+```{r}
+llcoo<-Boxplot(cooks.distance(m22), id.n=4)
+llcoo<-which(abs(cooks.distance(m22))>0.8);length(llcoo)
+dff[llcoo,]
+```
+Molt pocs diners i temps per tanta distancia
+
+No treurem els outliers degut a que en TOTS els models que ho hem provat ens apareixien models amb heterocedasticitat. Preferim treballar sense treure els outliers dels models.
+
+```{r}
+bptest(m22)
+```
+El model m22 té homocedasticitat com podem observar
+
+```{r}
+marginalModelPlots(m22)
+```
+No s'observa cap problema entre les dades i el model, les línies blaves i vermelles no estan separades.
+
+```{r}
+residualPlots(m22)
+```
+
+```{r}
+plot(allEffects(m22))
+```
+
+
+
+# Construcció del model
+
+```{r}
+summary(m22)
+```
+
+Interpretació:
+Total_amount = 7.746 + 1.050951 * Tip_amount + 5.344 * Tolls_amount + 2.102 * Trip_distance_km - 0.204 * speed - 0.27 * f.ExtraExtra.0.5 + 1.492 * f.ExtraExtra.1 - 0.855 * Payment_typePaymentType.Cash + 0.383 * Payment_typePaymentType.Others - 0.158  * Trip_distance_km:f.ExtraExtra.0.5 + 0.078 * Trip_distance_km:f.ExtraExtra.1 + 0.052 * speed:f.ExtraExtra.0.5 - 0.048 * speed:f.ExtraExtra.1 + 0.04 * speed:Payment_typePaymentType.Cash - 0.129 * speed:Payment_typePaymentType.Others
+
